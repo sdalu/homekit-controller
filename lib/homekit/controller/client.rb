@@ -24,9 +24,10 @@ module HomeKit
             end
 
             # Pair-verify on a plain connection, then encrypt that socket.
-            def self.connect(pairing)
+            # timeout: seconds a connection or a reply may take.
+            def self.connect(pairing, timeout: TIMEOUT)
                 host   = "#{pairing.host}:#{pairing.port}"
-                socket = tcp(pairing.host, pairing.port)
+                socket = tcp(pairing.host, pairing.port, timeout)
                 plain  = HTTP.new(Transport::Plain.new(socket), host)
                 keys   = PairVerify.new(plain, pairing).call
                 new(HTTP.new(Transport::Secure.new(socket, **keys), host))
@@ -35,16 +36,22 @@ module HomeKit
                 raise
             end
 
-            def self.open(pairing)
-                client = connect(pairing)
+            def self.open(pairing, timeout: TIMEOUT)
+                client = connect(pairing, timeout:)
                 yield client
             ensure
                 client&.close
             end
 
+            # Follows characteristics across sessions and failures: see
+            # Watch.
+            def self.watch(pairing, *ids, **, &)
+                Watch.new(pairing, ids, **).each(&)
+            end
+
             def self.tcp(host, port, timeout = TIMEOUT)
                 socket = Socket.tcp(host, Integer(port),
-                                    connect_timeout: TIMEOUT)
+                                    connect_timeout: [timeout, TIMEOUT].min)
                 socket.timeout = timeout
                 socket
             end
@@ -54,13 +61,16 @@ module HomeKit
                 @http = http
             end
 
-            def accessories = get("/accessories").fetch("accessories")
+            def accessories = list(get("/accessories"), "accessories")
 
             # ids: [aid, iid] pairs; returns the characteristics' JSON.
             def read(*ids)
                 query = ids.map { it.join(".") }.join(",")
-                get("/characteristics?id=#{query}").fetch("characteristics")
+                list(get("/characteristics?id=#{query}"), "characteristics")
             end
+
+            # ids: [aid, iid] pairs; returns { [aid, iid] => value }.
+            def values(*ids) = by_id(read(*ids))
 
             # values: { [aid, iid] => value }
             def write(values)
@@ -79,9 +89,7 @@ module HomeKit
             # one must subscribe again.
             def next_event(timeout: nil)
                 event = @http.next_event(timeout) or return
-                event.json.fetch("characteristics", []).to_h do |change|
-                    [change.values_at("aid", "iid"), change["value"]]
-                end
+                by_id(list(event.json, "characteristics"))
             end
 
             # Removes a controller's pairing (ours by default).
@@ -101,6 +109,18 @@ module HomeKit
                 response.json
             end
 
+            # The array under key in a JSON reply, of objects.
+            def list(json, key)
+                items = json.fetch(key, nil)
+                return items if items.is_a?(Array) && items.all?(Hash)
+                raise ProtocolError, "reply has no #{key} list"
+            end
+
+            # { [aid, iid] => value } from characteristics' JSON.
+            def by_id(list)
+                list.to_h { [it.values_at("aid", "iid"), it["value"]] }
+            end
+
             def notify(ids, enable)
                 put(ids.map { |aid, iid| { aid:, iid:, ev: enable } })
             end
@@ -114,10 +134,15 @@ module HomeKit
                 check_write(response)
             end
 
+            def accepted?(item)
+                status = item.is_a?(Hash) && item.fetch("status", 0)
+                Integer(status, exception: false)&.zero?
+            end
+
             def check_write(response)
                 return if response.status == 204
-                failed = response.json.fetch("characteristics", [])
-                                 .reject { it.fetch("status", 0).zero? }
+                failed = Array(response.json["characteristics"])
+                         .reject { accepted?(it) }
                 return if response.success? && failed.empty?
                 raise ProtocolError, "write rejected: #{failed.to_json}"
             end

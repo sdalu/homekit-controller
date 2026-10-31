@@ -148,3 +148,24 @@ class FakeAccessory
         TLV8.encode(identifier: @id, public_key:, signature:)
     end
 end
+
+# Feeds each request to a fake accessory, queues its HTTP reply: pairing
+# without a socket.
+class LoopTransport
+    def initialize(accessory)
+        @accessory = accessory
+        @replies   = +"".b
+    end
+
+    def write(request)
+        head, body = request.split("\r\n\r\n", 2)
+        reply = HomeKit::Controller::TLV8.encode(
+            @accessory.handle(head[/\APOST (\S+)/, 1], body)
+        )
+        @replies << "HTTP/1.1 200 OK\r\nContent-Length: " \
+                    "#{reply.bytesize}\r\n\r\n".b << reply
+    end
+
+    def read_chunk = @replies.slice!(0, 100)
+    def close      = nil
+end

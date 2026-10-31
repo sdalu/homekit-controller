@@ -33,4 +33,11 @@ class TLV8Test < Minitest::Test
         end
         assert_match(/already paired/, error.message)
     end
+
+    def test_an_empty_error_item_is_still_an_error
+        error = assert_raises(HomeKit::Controller::PairingError) do
+            TLV8.check!(TLV8.decode("\x06\x01\x02\x07\x00".b))
+        end
+        assert_match(/no code/, error.message)
+    end
 end

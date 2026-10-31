@@ -61,6 +61,16 @@ class ThermostatsTest < Minitest::Test
         end
     end
 
+    def test_a_malformed_accessory_is_a_protocol_error
+        @client.define_singleton_method(:accessories) do
+            [{ "aid" => 3, "services" => [{ "iid" => 1 }] }]
+        end
+        error = assert_raises(HomeKit::Controller::ProtocolError) do
+            @thermostats.all
+        end
+        assert_match(/accessory 3: KeyError/, error.message)
+    end
+
     def test_finds_by_unique_part_of_its_name
         assert_equal 2, @thermostats.find("LIVING").aid
     end

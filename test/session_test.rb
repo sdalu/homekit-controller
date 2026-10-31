@@ -29,6 +29,13 @@ class SessionTest < Minitest::Test
         end
     end
 
+    def test_a_malformed_ed25519_key_fails_authentication
+        error = assert_raises(HAP::AuthenticationError) do
+            HAP::Crypto.verify!("short", "signature", "data")
+        end
+        assert_match(/malformed Ed25519 key/, error.message)
+    end
+
     def test_http_sets_events_aside_and_reads_chunked_bodies
         transport = CannedTransport.new(
             "EVENT/1.0 200 OK\r\nContent-Length: 2\r\n\r\n{}" \
@@ -40,6 +47,34 @@ class SessionTest < Minitest::Test
         assert_equal({ "a" => 1 }, response.json)
         assert_equal 1, http.events.size
         assert_match(%r{\AGET /accessories HTTP/1.1\r\n}, transport.sent)
+    end
+
+    def test_http_refuses_lengths_it_cannot_trust
+        ["Content-Length: -5", "Content-Length: 1w9",
+         "Content-Length: #{(16 * 1024 * 1024) + 1}",
+         "Transfer-Encoding: chunked\r\n\r\nzz"].each do |header|
+            assert_raises(HAP::ProtocolError, header) do
+                canned("HTTP/1.1 200 OK\r\n#{header}\r\n\r\n")
+            end
+        end
+    end
+
+    def canned(reply)
+        HAP::HTTP.new(CannedTransport.new(reply), "bridge").request("GET", "/")
+    end
+
+    def test_http_refuses_a_line_without_end
+        transport = CannedTransport.new("HTTP/1.1 200 OK#{" " * 9000}")
+        assert_raises(HAP::ProtocolError) do
+            HAP::HTTP.new(transport, "bridge").request("GET", "/")
+        end
+    end
+
+    def test_malformed_json_is_a_protocol_error
+        ["{", "[1]"].each do |body|
+            response = HAP::HTTP::Response.new(200, {}, body)
+            assert_raises(HAP::ProtocolError, body) { response.json }
+        end
     end
 
     # Hands out canned bytes a few at a time, to exercise buffering.

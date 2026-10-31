@@ -15,6 +15,7 @@ class EventsTest < Minitest::Test
     def setup
         left, right = UNIXSocket.pair
         one, two    = Array.new(2) { Random.bytes(32) }
+        @socket     = left
         ours = HAP::Transport::Secure.new(left, write_key: one, read_key: two)
         @client    = HAP::Client.new(HAP::HTTP.new(ours, "bridge"))
         @accessory = HAP::Transport::Secure.new(right, write_key: two,
@@ -31,11 +32,12 @@ class EventsTest < Minitest::Test
                      sent.fetch("characteristics")
     end
 
-    def test_unsubscribe_stops_them
-        @accessory.write(NO_CONTENT)
+    def test_a_session_serves_one_request_after_another
+        @accessory.write(NO_CONTENT + NO_CONTENT)
+        @client.subscribe([1, 10])
         @client.unsubscribe([1, 10])
-        assert_equal [{ "aid" => 1, "iid" => 10, "ev" => false }],
-                     sent.fetch("characteristics")
+        flags = [sent, sent].map { it["characteristics"][0]["ev"] }
+        assert_equal [true, false], flags
     end
 
     def test_a_refused_subscription_is_reported
@@ -76,6 +78,25 @@ class EventsTest < Minitest::Test
         assert_raises(HAP::ProtocolError) { @client.next_event(timeout: 1) }
     end
 
+    # IO#wait_readable(nil) gives up after the socket's own timeout.
+    def test_no_timeout_waits_past_the_sockets_own
+        @socket.timeout = 0.05
+        Thread.new do
+            sleep 0.3
+            @accessory.write(event([1, 10] => 18.0))
+        end
+        assert_equal({ [1, 10] => 18.0 }, @client.next_event)
+    end
+
+    # A reply arriving after its request timed out must not answer the
+    # next one: the session is closed instead.
+    def test_a_timed_out_request_closes_the_session
+        @socket.timeout = 0.05
+        assert_raises(IO::TimeoutError) { @client.read([1, 10]) }
+        late([1, 10] => "late")
+        assert_raises(IOError) { @client.read([1, 11]) }
+    end
+
     def test_the_accessory_closing_ends_the_wait
         @accessory.close
         assert_raises(EOFError) { @client.next_event(timeout: 1) }
@@ -92,6 +113,14 @@ class EventsTest < Minitest::Test
     def event(changes)
         list = changes.map { |(aid, iid), value| { aid:, iid:, value: } }
         reply(200, { characteristics: list }, version: "EVENT/1.0")
+    end
+
+    # A reply the accessory sends too late; the session may be closed.
+    def late(values)
+        list = values.map { |(aid, iid), value| { aid:, iid:, value: } }
+        @accessory.write(reply(200, { characteristics: list }))
+    rescue SystemCallError
+        nil
     end
 
     # The JSON body of the request the controller sent.

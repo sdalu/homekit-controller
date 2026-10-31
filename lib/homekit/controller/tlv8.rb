@@ -45,9 +45,10 @@ module HomeKit
 
             # Raises PairingError if the accessory reported an error.
             def check!(items)
-                code = items[:error]&.ord
-                return items unless code
-                raise PairingError, ERRORS.fetch(code, "error #{code}")
+                return items unless items.key?(:error)
+                code = items[:error].unpack1("C")
+                raise PairingError,
+                      ERRORS.fetch(code) { "error #{code || "with no code"}" }
             end
 
             def fetch_all(items, *names)

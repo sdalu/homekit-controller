@@ -41,6 +41,19 @@ end
   as `{ [aid, iid] => value }`, or nil once the timeout passes. When
   the accessory closes the session, `next_event` raises `EOFError`: open
   a new one and subscribe again.
+- `Client.watch(pairing, *ids) { |values| }` does that for you, for as
+  long as the block wants: it yields every value on each connection
+  (so nothing changed while away is missed), then each change; it probes
+  a session quiet for `idle:` seconds (60), and after a network failure
+  connects again, waiting 1 s doubled up to 60 s (`backoff: 1..60`),
+  calling `lost:` with each error. A refused subscription or a pairing
+  the accessory no longer accepts ends it with the error.
+
+  ```ruby
+  hap::Client.watch(pairing, [2, 10], lost: ->(e) { warn e.message }) do |values|
+      values.each { |(aid, iid), value| puts "#{aid}.#{iid} = #{value}" }
+  end
+  ```
 - `Thermostats#find(name)` takes the full name, any case, or any part of
   it that picks out one thermostat.
 - `Thermostat` reads the HomeKit Thermostat service: current and target
@@ -57,13 +70,15 @@ unwritable path fails while nothing is lost yet.
 
 Errors are `HomeKit::Controller::Error` and its subclasses
 `ProtocolError`, `AuthenticationError` and `PairingError`; the network's
-own (`SystemCallError`, `IOError`, `Timeout::Error`) pass through.
+own (`SystemCallError`, `IOError`, `Timeout::Error`) pass through. A
+session whose exchange was cut short (a timeout, a malformed reply) is
+closed, and raises `IOError` if used again: open a new one.
 
 ## Known shortfalls
 
 - IP accessories only: no Bluetooth LE, no Thread.
-- Events are taken one session at a time, by the caller: no thread
-  reads them, and nothing reconnects or resubscribes on its own.
+- Events are read on the caller's thread: a session is not to be
+  shared between threads.
 - Adding another controller's pairing is not built; removing one is
   (`Client#remove_pairing`), which is how `unpair` frees an accessory.
 

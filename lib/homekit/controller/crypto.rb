@@ -41,6 +41,8 @@ module HomeKit
                 key = OpenSSL::PKey.new_raw_public_key("ED25519", public_key)
                 return if key.verify(nil, signature, data)
                 raise AuthenticationError, "bad Ed25519 signature"
+            rescue OpenSSL::PKey::PKeyError
+                raise AuthenticationError, "malformed Ed25519 key"
             end
 
             def aead(mode, key, nonce, aad, tag = nil)

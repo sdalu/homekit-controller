@@ -10,7 +10,101 @@ module HomeKit
         class HTTP
             Response = Data.define(:status, :headers, :body) do
                 def success? = status.between?(200, 299)
-                def json     = body.empty? ? {} : JSON.parse(body)
+
+                # The body's JSON object; ProtocolError for anything else.
+                def json
+                    return {} if body.empty?
+                    object = JSON.parse(body)
+                    return object if object.is_a?(Hash)
+                    raise ProtocolError, "JSON body is not an object"
+                rescue JSON::ParserError
+                    raise ProtocolError, "malformed JSON body"
+                end
+            end
+
+            # Reads messages off a transport, holding what arrived beyond
+            # the current one. Lengths are taken only as HTTP writes them,
+            # and bounded: a line, and a body (a large bridge's
+            # /accessories is a few hundred KB).
+            class Reader
+                MAX_LINE = 8 * 1024
+                MAX_BODY = 16 * 1024 * 1024
+
+                def initialize(transport)
+                    @transport = transport
+                    @buffer    = "".b
+                end
+
+                # Whether part of a message has already arrived.
+                def pending? = !@buffer.empty?
+
+                # [version, Response]
+                def message
+                    version, status = line.split(" ", 3)
+                    headers = self.headers
+                    [version.to_s,
+                     Response.new(status.to_i, headers, body(headers))]
+                end
+
+                private
+
+                def headers
+                    headers = {}
+                    while (line = self.line) != ""
+                        name, value = line.split(":", 2)
+                        headers[name.strip.downcase] = value.to_s.strip
+                    end
+                    headers
+                end
+
+                def body(headers)
+                    chunked = headers["transfer-encoding"]&.casecmp?("chunked")
+                    return chunked_body if chunked
+                    length = headers.fetch("content-length", "0")
+                    bytes(length_of(length[/\A\d+\z/]&.to_i, length))
+                end
+
+                # Chunk sizes are hexadecimal, maybe with a ";extension".
+                def chunked_body
+                    body = "".b
+                    while (size = chunk_size).positive?
+                        body << bytes(size)
+                        length_of(body.bytesize, "chunked body")
+                        line
+                    end
+                    nil while line != ""
+                    body
+                end
+
+                def chunk_size
+                    text = line
+                    length_of(text[/\A\h+(?=;|\z)/]&.hex, text)
+                end
+
+                # A length read from given (nil when malformed), within
+                # MAX_BODY.
+                def length_of(length, given)
+                    raise ProtocolError, "bad length #{given[0, 20].inspect}" \
+                        unless length
+                    raise ProtocolError, "body too large" if length > MAX_BODY
+                    length
+                end
+
+                def line
+                    until (index = @buffer.index("\r\n"))
+                        raise ProtocolError, "line too long" if
+                            @buffer.bytesize > MAX_LINE
+                        fill
+                    end
+                    @buffer.slice!(0, index + 2).chomp
+                end
+
+                def bytes(count)
+                    fill while @buffer.bytesize < count
+                    @buffer.slice!(0, count)
+                end
+
+                def fill = @buffer << @transport.read_chunk.b
             end
 
             TLV_TYPE = "application/pairing+tlv8"
@@ -20,16 +114,18 @@ module HomeKit
             def initialize(transport, host)
                 @transport = transport
                 @host      = host
-                @buffer    = "".b
+                @reader    = Reader.new(transport)
                 @events    = []
             end
 
             def request(method, path, body: nil, type: nil)
-                @transport.write(build(method, path, body, type))
-                loop do
-                    version, response = read_message
-                    return response unless version.start_with?("EVENT/")
-                    @events << response
+                exchange do
+                    @transport.write(build(method, path, body, type))
+                    loop do
+                        version, response = @reader.message
+                        return response unless version.start_with?("EVENT/")
+                        @events << response
+                    end
                 end
             end
 
@@ -48,8 +144,9 @@ module HomeKit
             # is waited for, so a timeout never cuts a message in two.
             def next_event(timeout = nil)
                 return @events.shift unless @events.empty?
-                return if @buffer.empty? && !@transport.wait_readable(timeout)
-                version, response = read_message
+                return unless @reader.pending? ||
+                              @transport.wait_readable(timeout)
+                version, response = exchange { @reader.message }
                 return response if version.start_with?("EVENT/")
                 raise ProtocolError,
                       "HTTP #{response.status} answering no request"
@@ -59,6 +156,20 @@ module HomeKit
 
             private
 
+            # Whatever cuts an exchange short (a timeout, a bad message, an
+            # interrupt) leaves the stream between two messages, where a
+            # late reply would answer the next request: the session is
+            # closed instead, so that using it again raises IOError. Any
+            # exception: Timeout.timeout's and Interrupt are not
+            # StandardError. (A flag set after yield would close on a
+            # return from the block too.)
+            def exchange
+                yield
+            rescue Exception # rubocop:disable Lint/RescueException
+                close
+                raise
+            end
+
             def build(method, path, body, type)
                 head = ["#{method} #{path} HTTP/1.1", "Host: #{@host}"]
                 if body
@@ -67,50 +178,6 @@ module HomeKit
                 end
                 "#{head.join("\r\n")}\r\n\r\n".b + body.to_s.b
             end
-
-            def read_message
-                version, status = read_line.split(" ", 3)
-                headers = read_headers
-                [version.to_s,
-                 Response.new(status.to_i, headers, read_body(headers))]
-            end
-
-            def read_headers
-                headers = {}
-                while (line = read_line) != ""
-                    name, value = line.split(":", 2)
-                    headers[name.strip.downcase] = value.to_s.strip
-                end
-                headers
-            end
-
-            def read_body(headers)
-                chunked = headers["transfer-encoding"]&.casecmp?("chunked")
-                return read_chunked if chunked
-                read_bytes(headers.fetch("content-length", "0").to_i)
-            end
-
-            def read_chunked
-                body = "".b
-                while (size = read_line.to_i(16)).positive?
-                    body << read_bytes(size)
-                    read_line
-                end
-                nil while read_line != ""
-                body
-            end
-
-            def read_line
-                fill until (index = @buffer.index("\r\n"))
-                @buffer.slice!(0, index + 2).chomp
-            end
-
-            def read_bytes(count)
-                fill while @buffer.bytesize < count
-                @buffer.slice!(0, count)
-            end
-
-            def fill = @buffer << @transport.read_chunk.b
         end
     end
 end

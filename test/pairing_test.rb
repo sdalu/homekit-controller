@@ -66,6 +66,19 @@ class PairingTest < Minitest::Test
         assert_match(/unexpected accessory/, error.message)
     end
 
+    # Before pair-verify authenticates anything: whatever answers at the
+    # accessory's address may send it.
+    def test_verify_refuses_a_malformed_key
+        pairing = pair("12345678")
+        reply   = { public_key: "short", encrypted_data: Random.bytes(40) }
+        http    = Object.new
+        http.define_singleton_method(:tlv) { |*, **| reply }
+        error = assert_raises(HAP::AuthenticationError) do
+            HAP::PairVerify.new(http, pairing).call
+        end
+        assert_match(/malformed X25519 key/, error.message)
+    end
+
     def test_setup_refuses_a_wrong_srp_proof
         @http = http(FakeAccessory.new(tamper: :proof))
         error = assert_raises(HAP::AuthenticationError) { pair("12345678") }
@@ -89,25 +102,5 @@ class PairingTest < Minitest::Test
     def pair(code)
         identities = HAP::PairSetup.new(@http, code).call
         HAP::Pairing.new(**identities, host: "bridge", port: 80)
-    end
-
-    # Feeds each request to the fake accessory, queues its HTTP reply.
-    class LoopTransport
-        def initialize(accessory)
-            @accessory = accessory
-            @replies   = +"".b
-        end
-
-        def write(request)
-            head, body = request.split("\r\n\r\n", 2)
-            reply = HomeKit::Controller::TLV8.encode(
-                @accessory.handle(head[/\APOST (\S+)/, 1], body)
-            )
-            @replies << "HTTP/1.1 200 OK\r\nContent-Length: " \
-                        "#{reply.bytesize}\r\n\r\n".b << reply
-        end
-
-        def read_chunk = @replies.slice!(0, 100)
-        def close      = nil
     end
 end

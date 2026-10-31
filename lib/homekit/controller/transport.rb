@@ -5,7 +5,20 @@ module HomeKit
         # Byte pipes the HTTP layer runs over: the socket as is during
         # pairing, then encrypted frames once a session is verified.
         module Transport
+            # Truthy once data arrives, nil after timeout seconds. nil
+            # waits for ever: IO#wait_readable(nil) would give up after the
+            # socket's own timeout instead.
+            module Waiting
+                def wait_readable(timeout)
+                    return @socket.wait_readable(timeout) if timeout
+                    nil until (ready = @socket.wait_readable(nil))
+                    ready
+                end
+            end
+
             class Plain
+                include Waiting
+
                 def initialize(socket)
                     @socket = socket
                 end
@@ -13,13 +26,13 @@ module HomeKit
                 def write(data) = @socket.write(data)
                 def read_chunk  = @socket.readpartial(4096)
                 def close       = @socket.close
-
-                def wait_readable(timeout) = @socket.wait_readable(timeout)
             end
 
             # Frames of at most 1024 bytes: a little-endian length, used
             # as additional data, then the ciphertext and its tag.
             class Secure
+                include Waiting
+
                 FRAME = 1024
 
                 def initialize(socket, write_key:, read_key:)
@@ -41,9 +54,6 @@ module HomeKit
                 end
 
                 def close = @socket.close
-
-                # Truthy once a frame begins, nil after timeout seconds.
-                def wait_readable(timeout) = @socket.wait_readable(timeout)
 
                 private
 

@@ -11,8 +11,16 @@ module HomeKit
                 @kind   = kind
             end
 
+            # An accessory whose JSON is not as HAP has it raises
+            # ProtocolError, naming what was wrong.
             def all
-                @client.accessories.filter_map { @kind.from_accessory(it) }
+                @client.accessories.filter_map do |accessory|
+                    @kind.from_accessory(accessory)
+                rescue KeyError, TypeError, NoMethodError, ArgumentError => e
+                    raise ProtocolError,
+                          "accessory #{accessory["aid"].inspect}: " \
+                          "#{e.class}: #{e.message}"
+                end
             end
 
             # The one whose name is name (any case), else the one whose

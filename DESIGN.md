@@ -26,6 +26,31 @@ must own the socket. Only the start of a message is waited for, with
 the caller's timeout; once one begins it is read whole, so a timeout
 never leaves the stream cut in two.
 
+## A session cut short is closed
+
+A reply that times out may still arrive, and would then be read as the
+reply to the next request. So whatever cuts an exchange short closes
+the session; the caller opens another. For the same reason the event
+wait only times out between messages, and what the other end sends is
+bounded and checked before it is trusted: lengths as HTTP writes them,
+a line and a body of limited size, keys of the right length, JSON of
+the right shape, each failure a ProtocolError or AuthenticationError
+rather than whatever the parser raised. Pair-verify reads its first
+reply before anything is authenticated, from whatever answers at the
+accessory's address.
+
+## Watching across sessions
+
+`Client.watch` retries what the network does (refused or lost
+connections, timeouts) and nothing else: a refused subscription and a
+pairing the accessory no longer accepts would fail the same way every
+time, and what the caller's block raises is the caller's. It reads every
+value on each connection, as changes made while away send no event,
+and probes a quiet session, as an accessory that loses power sends no
+word. The wait between attempts doubles, and returns to its shortest
+only once a session has brought a change, so that an accessory which
+accepts and then drops connections is not hammered.
+
 ## Pairing kept safe before it exists
 
 An accessory holds a single controller pairing, and commits to it

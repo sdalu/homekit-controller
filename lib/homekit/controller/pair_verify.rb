@@ -37,6 +37,8 @@ module HomeKit
                 @ephemeral.derive(
                     OpenSSL::PKey.new_raw_public_key("X25519", theirs)
                 )
+            rescue OpenSSL::PKey::PKeyError
+                raise AuthenticationError, "malformed X25519 key"
             end
 
             def check_accessory(session, theirs, sealed)
