@@ -44,8 +44,7 @@ module HomeKit
                 socket = listener
                 socket.send(query, 0, GROUP, PORT)
                 collect(socket, now + timeout)
-                lookup(SERVICE, IN::PTR).map { it.name.to_s }.uniq
-                                        .filter_map { service(it) }
+                services
             ensure
                 socket&.close
             end
@@ -58,8 +57,11 @@ module HomeKit
                 socket.setsockopt(:SOCKET, :REUSEADDR, true)
                 socket.setsockopt(:SOCKET, :REUSEPORT, true)
                 socket.bind("0.0.0.0", PORT)
-                group = IPAddr.new(GROUP).hton + IPAddr.new(@interface).hton
+                interface = IPAddr.new(@interface).hton
+                group     = IPAddr.new(GROUP).hton + interface
                 socket.setsockopt(:IPPROTO_IP, :IP_ADD_MEMBERSHIP, group)
+                # The query too, or it leaves by the default route.
+                socket.setsockopt(:IPPROTO_IP, :IP_MULTICAST_IF, interface)
                 socket
             end
 
@@ -80,7 +82,7 @@ module HomeKit
             def record(packet)
                 Resolv::DNS::Message.decode(packet).each_resource do
                     |name, _ttl, data|
-                    @records[name.to_s.downcase] << data
+                    @records[text(name).downcase] << data
                 end
             rescue Resolv::DNS::DecodeError
                 nil
@@ -88,8 +90,19 @@ module HomeKit
 
             def now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 
+            # Resolv gives names and TXT strings as bytes; mDNS sends
+            # UTF-8 (RFC 6762, section 16), garbled bytes replaced.
+            def text(value)
+                value.to_s.dup.force_encoding(Encoding::UTF_8).scrub
+            end
+
             def lookup(name, type)
                 @records[name.downcase].grep(type)
+            end
+
+            def services
+                lookup(SERVICE, IN::PTR).map { text(it.name) }.uniq
+                                        .filter_map { service(it) }
             end
 
             def service(instance)
@@ -103,12 +116,12 @@ module HomeKit
 
             def txt(instance)
                 strings = lookup(instance, IN::TXT).first&.strings.to_a
-                strings.to_h { it.split("=", 2).values_at(0, 1) }
+                strings.to_h { text(it).split("=", 2).values_at(0, 1) }
             end
 
             # The A record comes with the answer; else keep the name.
             def address(target)
-                (lookup(target.to_s, IN::A).first&.address || target).to_s
+                text(lookup(text(target), IN::A).first&.address || target)
             end
         end
     end
