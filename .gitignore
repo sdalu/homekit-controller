@@ -1,0 +1,4 @@
+/.bundle/
+Gemfile.lock
+pkg/
+CLAUDE.local.md
