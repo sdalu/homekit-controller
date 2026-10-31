@@ -65,6 +65,27 @@ class ThermostatsTest < Minitest::Test
         assert_equal 2, @thermostats.find("LIVING").aid
     end
 
+    # A maker's subclass is what Thermostats builds when given it.
+    def test_builds_the_kind_it_is_given
+        kind = Class.new(HomeKit::Controller::Thermostat) do
+            def maker = "acme"
+        end
+        found = HomeKit::Controller::Thermostats.new(@client, kind:).all
+        assert_equal [kind], found.map(&:class)
+        assert_equal "acme", found.first.maker
+    end
+
+    # From the accessory's minValue and maxValue; 0.1 when it gives no
+    # step.
+    def test_target_range_and_its_default_step
+        assert_equal [5.0, 25.0, 0.1],
+                     @thermostats.find("living").target_range
+    end
+
+    def test_an_accessory_without_a_thermostat_is_none
+        assert_equal ["Living room"], @thermostats.all.map(&:name)
+    end
+
     def test_unknown_thermostat
         assert_raises(ArgumentError) { @thermostats.find("Attic") }
     end

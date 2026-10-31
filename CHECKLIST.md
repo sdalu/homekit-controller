@@ -3,10 +3,11 @@
 ## Gates
 
 - [ ] `bundle exec rake` passes: tests, then RuboCop.
-- [ ] A real accessory still reads, if the protocol layer changed: open
-  a session with an existing pairing and list its accessories. Never
-  pair or unpair as a check: an accessory takes one pairing, and a lost
-  one needs a factory reset.
+- [ ] `bundle exec rake accessory` prints a count (HAP_PAIRING=, an
+  existing pairing), if the protocol layer changed: a session with a
+  real accessory, read only. Never pair or unpair
+  as a check: an accessory takes one pairing, and a lost one needs a
+  factory reset.
 
 ## Documents
 

@@ -14,5 +14,3 @@ Ruby style: the `ruby` skill (4-space indentation, double quotes,
   here: it takes one controller, and a lost pairing key needs a factory
   reset. Tests use test/support/fake_accessory.rb; never pair as a
   check.
-- ClimatControl (~/Repos/ClimatControl) uses this gem through a path in
-  its Gemfile: a change here is live there at once, so run its gate too.
