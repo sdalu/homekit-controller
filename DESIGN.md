@@ -15,6 +15,17 @@ Pair-setup has the accessory run 3072-bit SRP arithmetic, which a
 bridge's small CPU can take tens of seconds over, so pairing waits
 longer (90 s) than a session's requests (10 s).
 
+## Events on the caller's thread
+
+An accessory sends a subscribed characteristic's changes on the session
+it was subscribed on, as `EVENT/1.0` messages between the replies. The
+session reads them only when asked (`Client#next_event`, which also
+hands over those met while waiting for a reply), rather than from a
+thread of its own: the encrypted frames are numbered, so one reader
+must own the socket. Only the start of a message is waited for, with
+the caller's timeout; once one begins it is read whole, so a timeout
+never leaves the stream cut in two.
+
 ## Pairing kept safe before it exists
 
 An accessory holds a single controller pairing, and commits to it

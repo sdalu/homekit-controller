@@ -35,6 +35,12 @@ end
 - `Client#accessories` is GET /accessories; `Client#read(*ids)` reads
   characteristics by `[aid, iid]`, and `Client#write` takes
   `{ [aid, iid] => value }`.
+- `Client#subscribe(*ids)` has the accessory send changes to those
+  characteristics (those with `"ev"` in their `perms`) for as long as
+  the session lasts, and `Client#next_event(timeout:)` takes the next,
+  as `{ [aid, iid] => value }`, or nil once the timeout passes. When
+  the accessory closes the session, `next_event` raises `EOFError`: open
+  a new one and subscribe again.
 - `Thermostats#find(name)` takes the full name, any case, or any part of
   it that picks out one thermostat.
 - `Thermostat` reads the HomeKit Thermostat service: current and target
@@ -56,7 +62,8 @@ own (`SystemCallError`, `IOError`, `Timeout::Error`) pass through.
 ## Known shortfalls
 
 - IP accessories only: no Bluetooth LE, no Thread.
-- No event subscriptions: a value is known when it is read.
+- Events are taken one session at a time, by the caller: no thread
+  reads them, and nothing reconnects or resubscribes on its own.
 - Adding another controller's pairing is not built; removing one is
   (`Client#remove_pairing`), which is how `unpair` frees an accessory.
 

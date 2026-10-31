@@ -6,7 +6,7 @@ module HomeKit
     module Controller
         # Just enough HTTP/1.1 for HAP: one request at a time, bodies by
         # length or chunked, and unsolicited "EVENT/1.0" notifications set
-        # aside in #events.
+        # aside in #events until #next_event takes them.
         class HTTP
             Response = Data.define(:status, :headers, :body) do
                 def success? = status.between?(200, 299)
@@ -40,6 +40,19 @@ module HomeKit
                 reply = TLV8.check!(TLV8.decode(response.body))
                 return reply if response.success?
                 raise ProtocolError, "#{path}: HTTP #{response.status}"
+            end
+
+            # The next EVENT/1.0 notification: the oldest set aside during
+            # a request, else the next to arrive; nil when none begins
+            # within timeout seconds (nil: wait for ever). Only the start
+            # is waited for, so a timeout never cuts a message in two.
+            def next_event(timeout = nil)
+                return @events.shift unless @events.empty?
+                return if @buffer.empty? && !@transport.wait_readable(timeout)
+                version, response = read_message
+                return response if version.start_with?("EVENT/")
+                raise ProtocolError,
+                      "HTTP #{response.status} answering no request"
             end
 
             def close = @transport.close

@@ -13,6 +13,8 @@ module HomeKit
                 def write(data) = @socket.write(data)
                 def read_chunk  = @socket.readpartial(4096)
                 def close       = @socket.close
+
+                def wait_readable(timeout) = @socket.wait_readable(timeout)
             end
 
             # Frames of at most 1024 bytes: a little-endian length, used
@@ -39,6 +41,9 @@ module HomeKit
                 end
 
                 def close = @socket.close
+
+                # Truthy once a frame begins, nil after timeout seconds.
+                def wait_readable(timeout) = @socket.wait_readable(timeout)
 
                 private
 

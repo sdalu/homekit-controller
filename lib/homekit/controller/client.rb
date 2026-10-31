@@ -64,13 +64,24 @@ module HomeKit
 
             # values: { [aid, iid] => value }
             def write(values)
-                list = values.map { |(aid, iid), value| { aid:, iid:, value: } }
-                response = @http.request("PUT", "/characteristics",
-                                         body: JSON.generate(
-                                             characteristics: list
-                                         ),
-                                         type: JSON_TYPE)
-                check_write(response)
+                put(values.map { |(aid, iid), value| { aid:, iid:, value: } })
+            end
+
+            # Has the accessory send changes to these characteristics
+            # ([aid, iid] pairs, "ev" among their perms) for as long as
+            # this session lasts; #next_event takes them.
+            def subscribe(*ids)   = notify(ids, true)
+            def unsubscribe(*ids) = notify(ids, false)
+
+            # The next change the accessory sends, { [aid, iid] => value };
+            # nil when none comes within timeout seconds (nil: wait for
+            # ever). EOFError when the accessory closes the session: a new
+            # one must subscribe again.
+            def next_event(timeout: nil)
+                event = @http.next_event(timeout) or return
+                event.json.fetch("characteristics", []).to_h do |change|
+                    [change.values_at("aid", "iid"), change["value"]]
+                end
             end
 
             # Removes a controller's pairing (ours by default).
@@ -88,6 +99,19 @@ module HomeKit
                 raise ProtocolError, "GET #{path}: HTTP #{response.status}" \
                     unless response.success?
                 response.json
+            end
+
+            def notify(ids, enable)
+                put(ids.map { |aid, iid| { aid:, iid:, ev: enable } })
+            end
+
+            def put(list)
+                response = @http.request("PUT", "/characteristics",
+                                         body: JSON.generate(
+                                             characteristics: list
+                                         ),
+                                         type: JSON_TYPE)
+                check_write(response)
             end
 
             def check_write(response)
